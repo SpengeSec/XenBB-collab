@@ -263,9 +263,9 @@ footer{
     <div class="row">
       <input type="text" id="peerjs-key" placeholder="PeerJS API key (optional)" style="flex:1">
     </div>
-    <div class="hint">Image proxy (optional): clickpix.org blocks hotlinked images (referer check). Deploy the included api/proxy.js to Vercel (or worker.js to Cloudflare Workers) and paste its URL below - clickpix images will then load in the preview.</div>
+    <div class="hint" style="color:var(--muted)">Image proxy (required for clickpix): clickpix.org blocks hotlinking via referer check, and only a Cloudflare Worker (not Vercel) can bypass it. Leave set to the default worker below - clickpix images will then load in the preview.</div>
     <div class="row">
-      <input type="text" id="img-proxy-url" placeholder="https://xenbb-collab.vercel.app/api/proxy" style="flex:1">
+      <input type="text" id="img-proxy-url" placeholder="https://xbb-image-proxy.xenbb-collab.workers.dev" style="flex:1">
     </div>
     <div class="actions">
       <button id="settings-close">Close</button>
@@ -298,7 +298,7 @@ var selStart = 0, selEnd = 0;
 var LS_NAME = "xbb-name", LS_KEY = "xbb-peerjs-key", LS_PROXY = "xbb-img-proxy";
 nameInput.value = localStorage.getItem(LS_NAME) || "";
 $("#peerjs-key").value = localStorage.getItem(LS_KEY) || "";
-var proxyUrl = localStorage.getItem(LS_PROXY) || "";
+var proxyUrl = localStorage.getItem(LS_PROXY) || "https://xbb-image-proxy.xenbb-collab.workers.dev";
 $("#img-proxy-url").value = proxyUrl;
 
 /* ---------- status ---------- */
