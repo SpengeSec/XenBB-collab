@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XenBB Collab - XenForo BBCode Co-Editor</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --text:#1c2128; --muted:#66707d; --border:#d9dee5;
+  --accent:#2f6fed; --accent-hover:#2459c4; --ok:#1a9e4b; --warn:#c98a06; --err:#d64545;
+  --code-bg:#f0f2f5; --quote-bg:#f4f6f9; --quote-border:#c9d3df;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0e1116; --panel:#161b22; --text:#e2e6ec; --muted:#8b95a3; --border:#2a313c;
+    --accent:#4c8dff; --accent-hover:#6ba0ff; --ok:#3fb96b; --warn:#e0a63d; --err:#e05d5d;
+    --code-bg:#0a0d12; --quote-bg:#131820; --quote-border:#33415a;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  display:flex; flex-direction:column;
+}
+header{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:8px 14px; background:var(--panel); border-bottom:1px solid var(--border);
+}
+header h1{font-size:15px; margin:0 8px 0 0; font-weight:600; white-space:nowrap}
+header h1 span{color:var(--accent)}
+#status{display:flex; align-items:center; gap:6px; color:var(--muted); font-size:12.5px; min-width:120px}
+#status-dot{width:9px; height:9px; border-radius:50%; background:#9aa4b0; flex:none}
+#status-dot.connected{background:var(--ok)}
+#status-dot.hosting{background:var(--warn)}
+#status-dot.error{background:var(--err)}
+#room-chip{display:none; align-items:center; gap:6px; background:var(--code-bg); border:1px solid var(--border); border-radius:6px; padding:3px 8px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px}
+#room-chip.visible{display:inline-flex}
+.spacer{flex:1}
+input[type=text],input[type=url]{background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-size:13px; outline:none}
+input[type=text]:focus{border-color:var(--accent)}
+#name-input{width:110px}
+#join-input{width:150px}
+button{
+  background:var(--panel); color:var(--text); border:1px solid var(--border);
+  border-radius:6px; padding:5px 10px; font-size:13px; cursor:pointer;
+}
+button:hover{border-color:var(--accent); color:var(--accent)}
+button.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+button.primary:hover{background:var(--accent-hover); color:#fff}
+button.small{padding:3px 8px; font-size:12px}
+#toolbar{
+  display:flex; flex-wrap:wrap; gap:4px; padding:6px 14px;
+  background:var(--panel); border-bottom:1px solid var(--border);
+}
+#toolbar button{font-family:inherit}
+#toolbar .sep{width:1px; background:var(--border); margin:2px 6px}
+main{flex:1; display:grid; grid-template-columns:1fr 1fr; min-height:0}
+.pane{display:flex; flex-direction:column; min-height:0; overflow:hidden}
+.pane+.pane{border-left:1px solid var(--border)}
+.pane-label{
+  padding:4px 12px; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--muted); background:var(--panel); border-bottom:1px solid var(--border);
+}
+#editor{
+  flex:1; resize:none; border:0; outline:none; padding:14px;
+  background:var(--panel); color:var(--text);
+  font:13.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:pre-wrap; word-break:break-word;
+}
+#preview{
+  flex:1; overflow:auto; padding:14px 18px; background:var(--bg);
+  white-space:pre-wrap; word-break:break-word; font-size:14.5px; line-height:1.55;
+}
+footer{
+  display:flex; align-items:center; gap:14px; padding:6px 14px;
+  background:var(--panel); border-top:1px solid var(--border);
+  color:var(--muted); font-size:12px;
+}
+#save-note{opacity:0; transition:opacity .4s}
+#save-note.show{opacity:1}
+/* forum-ish preview styles */
+#preview a{color:var(--accent)}
+#preview img{max-width:100%; height:auto; border-radius:4px}
+#preview hr{border:0; border-top:1px solid var(--border); margin:12px 0}
+#preview .bb-quote{background:var(--quote-bg); border-left:3px solid var(--quote-border); border-radius:0 6px 6px 0; margin:8px 0; padding:0}
+#preview .bb-quote-head{font-size:12px; color:var(--muted); padding:6px 12px 0}
+#preview .bb-quote-body{padding:8px 12px}
+#preview .bb-code,#preview .bb-icode{background:var(--code-bg); border:1px solid var(--border); border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px}
+#preview .bb-code{display:block; padding:10px 12px; margin:8px 0; overflow-x:auto; white-space:pre}
+#preview .bb-icode{display:inline; padding:2px 5px; white-space:pre-wrap}
+#preview .bb-spoiler{border:1px solid var(--border); border-radius:6px; margin:8px 0; background:var(--panel)}
+#preview .bb-spoiler summary{cursor:pointer; padding:8px 12px; font-weight:600; font-size:13px; color:var(--accent); user-select:none}
+#preview .bb-spoiler-body{padding:8px 12px; border-top:1px solid var(--border)}
+#preview .bb-ispoiler{background:var(--text); color:transparent; border-radius:3px; cursor:pointer; transition:all .15s}
+#preview .bb-ispoiler:hover{color:inherit; background:var(--quote-bg)}
+#preview .bb-indent{margin:8px 0 8px 24px}
+#preview table{border-collapse:collapse; margin:8px 0}
+#preview td,#preview th{border:1px solid var(--border); padding:5px 10px}
+#preview th{background:var(--code-bg)}
+#preview .bb-user{color:var(--accent); font-weight:600}
+#preview .bb-attach{color:var(--muted); font-style:italic}
+#preview .bb-media{width:100%; max-width:640px; aspect-ratio:16/9; border:0; border-radius:6px}
+/* dialogs */
+.overlay{
+  position:fixed; inset:0; background:rgba(0,0,0,.45); display:flex;
+  align-items:center; justify-content:center; z-index:50;
+}
+.overlay[hidden]{display:none}
+.dialog{
+  background:var(--panel); border:1px solid var(--border); border-radius:10px;
+  padding:18px; width:420px; max-width:92vw; box-shadow:0 12px 40px rgba(0,0,0,.25);
+}
+.dialog h3{margin:0 0 12px; font-size:15px}
+.dialog .row{display:flex; gap:8px; margin:10px 0; align-items:center}
+.dialog .row input[type=text]{flex:1}
+.dialog .hint{color:var(--muted); font-size:12px; margin:8px 0}
+.dialog .divider{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; margin:12px 0}
+.dialog .divider::before,.dialog .divider::after{content:""; flex:1; border-top:1px solid var(--border)}
+.dialog .actions{display:flex; justify-content:flex-end; gap:8px; margin-top:14px}
+#img-progress{font-size:12.5px; color:var(--muted); margin-top:8px; white-space:pre-wrap}
+@media (max-width:760px){ main{grid-template-columns:1fr; grid-template-rows:1fr 1fr} .pane+.pane{border-left:0; border-top:1px solid var(--border)} }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Xen<span>BB</span> Collab</h1>
+  <div id="status"><span id="status-dot"></span><span id="status-text">Offline</span></div>
+  <div id="room-chip">Room: <b id="room-code"></b></div>
+  <div class="spacer"></div>
+  <span id="conn-label" style="font-size:12px;color:var(--muted)"></span>
+  <input type="text" id="name-input" placeholder="Your name" title="Shown to your collaborator">
+  <input type="text" id="join-input" placeholder="Room code">
+  <button id="btn-join" class="primary">Join</button>
+  <button id="btn-create">Create room</button>
+  <button id="btn-copy" class="small" title="Copy invite link">Copy invite link</button>
+  <button id="btn-settings" class="small" title="Settings">Settings</button>
+</header>
+
+<div id="toolbar">
+  <button data-act="wrap" data-open="[B]" data-close="[/B]" title="Bold (Ctrl/Cmd+B)">B</button>
+  <button data-act="wrap" data-open="[I]" data-close="[/I]" title="Italic (Ctrl/Cmd+I)"><i>I</i></button>
+  <button data-act="wrap" data-open="[U]" data-close="[/U]" title="Underline (Ctrl/Cmd+U)"><u>U</u></button>
+  <button data-act="wrap" data-open="[S]" data-close="[/S]" title="Strikethrough"><s>S</s></button>
+  <span class="sep"></span>
+  <button data-act="link" title="Link">Link</button>
+  <button data-act="image" title="Insert image via clickpix.org">Image</button>
+  <button data-act="media" title="Insert YouTube/Vimeo video">Media</button>
+  <span class="sep"></span>
+  <button data-act="wrap" data-open="[QUOTE]" data-close="[/QUOTE]" title="Quote">Quote</button>
+  <button data-act="wrap" data-open="[SPOILER]" data-close="[/SPOILER]" title="Spoiler">Spoiler</button>
+  <button data-act="wrap" data-open="[CODE]&#10;" data-close="&#10;[/CODE]" title="Code block">Code</button>
+  <button data-act="wrap" data-open="[LIST]&#10;[*] " data-close="&#10;[/LIST]" data-placeholder="item" title="Bulleted list">List</button>
+  <button data-act="wrap" data-open="[LIST=1]&#10;[*] " data-close="&#10;[/LIST]" data-placeholder="item" title="Numbered list">1. List</button>
+  <span class="sep"></span>
+  <button data-act="prompt-wrap" data-tag="COLOR" data-q="Color (name or #hex):" title="Text color">Color</button>
+  <button data-act="prompt-wrap" data-tag="SIZE" data-q="Size 1-7:" title="Text size">Size</button>
+  <span class="sep"></span>
+  <button data-act="wrap" data-open="[LEFT]" data-close="[/LEFT]" title="Align left">L</button>
+  <button data-act="wrap" data-open="[CENTER]" data-close="[/CENTER]" title="Center">C</button>
+  <button data-act="wrap" data-open="[RIGHT]" data-close="[/RIGHT]" title="Align right">R</button>
+  <button data-act="wrap" data-open="[JUSTIFY]" data-close="[/JUSTIFY]" title="Justify">J</button>
+  <span class="sep"></span>
+  <button data-act="wrap" data-open="[HEADING]" data-close="[/HEADING]" data-placeholder="Heading" title="Heading">H</button>
+  <button data-act="insert" data-text="[HR]&#10;" title="Horizontal rule">HR</button>
+  <button data-act="wrap" data-open="[TABLE]&#10;[TR]&#10;[TD]" data-close="[/TD]&#10;[/TR]&#10;[/TABLE]" data-placeholder="cell" title="Table">Table</button>
+</div>
+
+<main>
+  <div class="pane">
+    <div class="pane-label">BBCode source</div>
+    <textarea id="editor" spellcheck="false" placeholder="Type or paste XenForo BBCode here..."></textarea>
+  </div>
+  <div class="pane">
+    <div class="pane-label">Live preview</div>
+    <div id="preview"></div>
+  </div>
+</main>
+
+<footer>
+  <span id="counts">0 chars</span>
+  <span class="spacer"></span>
+  <span id="save-note">Draft saved</span>
+  <button id="btn-copy-bbcode" class="small">Copy BBCode</button>
+  <button id="btn-download" class="small">Download .txt</button>
+</footer>
+
+<div class="overlay" id="img-overlay" hidden>
+  <div class="dialog">
+    <h3>Insert image (hosted on clickpix.org)</h3>
+    <div class="row">
+      <input type="file" id="img-file" accept="image/*" style="flex:1">
+      <button id="img-upload" class="primary">Upload to clickpix</button>
+    </div>
+    <div id="img-progress"></div>
+    <div class="divider">or paste a direct image URL</div>
+    <div class="row">
+      <input type="text" id="img-url" placeholder="https://clickpix.org/...">
+      <button id="img-open-site" title="Upload at clickpix.org in a new tab, then paste the link">Open clickpix</button>
+    </div>
+    <div class="hint">Tip: upload at clickpix.org/upload in the other tab, copy the direct link (ends in .png/.jpg/.webp...), paste it here.</div>
+    <div class="actions">
+      <button id="img-cancel">Cancel</button>
+      <button id="img-insert" class="primary">Insert [IMG]</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="settings-overlay" hidden>
+  <div class="dialog">
+    <h3>Settings</h3>
+    <div class="hint">Real-time sync uses PeerJS (WebRTC). The free public PeerJS cloud usually works; if connections are flaky, get a free API key at peerjs.com and paste it here.</div>
+    <div class="row">
+      <input type="text" id="peerjs-key" placeholder="PeerJS API key (optional)" style="flex:1">
+      <button id="settings-save" class="primary">Save</button>
+    </div>
+    <div class="actions"><button id="settings-close">Close</button></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<script id="app">
+"use strict";
+var $ = function(s){ return document.querySelector(s); };
+var editor = $("#editor"), preview = $("#preview");
+var statusDot = $("#status-dot"), statusText = $("#status-text");
+var roomChip = $("#room-chip"), roomCodeEl = $("#room-code"), connLabel = $("#conn-label");
+var nameInput = $("#name-input"), joinInput = $("#join-input");
+
+var peer = null, conn = null, roomId = null, isHost = false;
+var remoteName = "";
+var syncTimer = null, draftTimer = null, reconnectTimer = null, suppress = false;
+var selStart = 0, selEnd = 0;
+
+var LS_NAME = "xbb-name", LS_KEY = "xbb-peerjs-key";
+nameInput.value = localStorage.getItem(LS_NAME) || "";
+$("#peerjs-key").value = localStorage.getItem(LS_KEY) || "";
+
+/* ---------- status ---------- */
+function setStatus(cls, text){
+  statusDot.className = cls;
+  statusText.textContent = text;
+}
+function showRoomChip(){
+  roomChip.classList.add("visible");
+  roomCodeEl.textContent = roomId || "";
+}
+function hideRoomChip(){ roomChip.classList.remove("visible"); }
+
+/* ---------- BBCode to HTML ---------- */
+function escapeHtml(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function unescapeHtml(s){
+  return String(s).replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,"&");
+}
+function safeUrl(u){
+  u = unescapeHtml(String(u || "")).trim().replace(/^["']+|["']+$/g,"");
+  return /^(https?|mailto):/i.test(u) ? u : "";
+}
+function sanitizeColor(c){
+  c = unescapeHtml(String(c || "")).trim().replace(/[;&]/g,"");
+  return /^(#[0-9a-f]{3,8}|[a-z]{3,20}|(rgb|rgba|hsl|hsla)\([0-9a-z,.% \s]+\))$/i.test(c) ? c : "";
+}
+function pairReplace(src, tag, render){
+  var openRe = new RegExp("\\[" + tag + "(?:=([^\\]]*))?\\]", "gi");
+  var closeRe = new RegExp("\\[\\/" + tag + "\\]", "gi");
+  var out = src;
+  for(;;){
+    closeRe.lastIndex = 0;
+    var cm = closeRe.exec(out);
+    if(!cm) break;
+    var lastOpen = null, om;
+    openRe.lastIndex = 0;
+    while((om = openRe.exec(out)) && om.index < cm.index){
+      lastOpen = { arg: om[1], index: om.index, len: om[0].length };
+    }
+    if(!lastOpen){
+      out = out.slice(0, cm.index) + out.slice(cm.index + cm[0].length);
+      continue;
+    }
+    var inner = out.slice(lastOpen.index + lastOpen.len, cm.index);
+    var html = render(lastOpen.arg == null ? undefined : lastOpen.arg, inner);
+    out = out.slice(0, lastOpen.index) + html + out.slice(cm.index + cm[0].length);
+  }
+  return out;
+}
+function bbcodeToHtml(src){
+  var blocks = [];
+  var s = String(src || "").replace(/\[(code|icode|plain|php|html)(?:\s*=[^\]]*)?\]([\s\S]*?)\[\/\1\]/gi, function(m, tag, inner){
+    blocks.push({ tag: tag.toLowerCase(), inner: inner });
+    return "\u0000" + (blocks.length - 1) + "\u0000";
+  });
+  s = escapeHtml(s);
+
+  s = pairReplace(s, "td", function(a,i){ return "<td>" + i + "</td>"; });
+  s = pairReplace(s, "th", function(a,i){ return "<th>" + i + "</th>"; });
+  s = pairReplace(s, "tr", function(a,i){ return "<tr>" + i + "</tr>"; });
+  s = pairReplace(s, "table", function(a,i){ return "<table>" + i + "</table>"; });
+
+  s = pairReplace(s, "list", function(arg, inner){
+    var parts = inner.split(/\[\*\]/gi).map(function(x){ return x.trim(); }).filter(function(x){ return x.length > 0; });
+    var body = parts.map(function(p){ return "<li>" + p + "</li>"; }).join("");
+    if(!body) body = "<li>" + inner + "</li>";
+    var isOl = /^[1aAiI]$/.test(String(arg || "").trim());
+    return isOl ? "<ol>" + body + "</ol>" : "<ul>" + body + "</ul>";
+  });
+
+  s = pairReplace(s, "quote", function(arg, inner){
+    var name = unescapeHtml(String(arg || "").trim()).replace(/^["']+|["']+$/g,"").split(",")[0].trim();
+    var head = name ? '<div class="bb-quote-head">' + escapeHtml(name) + " said:</div>" : '<div class="bb-quote-head">Quote:</div>';
+    return '<blockquote class="bb-quote">' + head + '<div class="bb-quote-body">' + inner + "</div></blockquote>";
+  });
+  s = pairReplace(s, "spoiler", function(arg, inner){
+    var t = unescapeHtml(String(arg || "").trim()).replace(/^["']+|["']+$/g,"");
+    return '<details class="bb-spoiler"><summary>' + (t ? escapeHtml(t) : "Spoiler") + '</summary><div class="bb-spoiler-body">' + inner + "</div></details>";
+  });
+  s = pairReplace(s, "ispoiler", function(a,i){ return '<span class="bb-ispoiler">' + i + "</span>"; });
+  s = pairReplace(s, "indent", function(a,i){ return '<blockquote class="bb-indent">' + i + "</blockquote>"; });
+
+  s = pairReplace(s, "center", function(a,i){ return '<div style="text-align:center">' + i + "</div>"; });
+  s = pairReplace(s, "left", function(a,i){ return '<div style="text-align:left">' + i + "</div>"; });
+  s = pairReplace(s, "right", function(a,i){ return '<div style="text-align:right">' + i + "</div>"; });
+  s = pairReplace(s, "justify", function(a,i){ return '<div style="text-align:justify">' + i + "</div>"; });
+  s = pairReplace(s, "align", function(arg,i){
+    var a = String(arg || "").trim().toLowerCase();
+    var v = {left:"left",center:"center",right:"right",justify:"justify"}[a] || "center";
+    return '<div style="text-align:' + v + '">' + i + "</div>";
+  });
+
+  s = pairReplace(s, "heading", function(arg, i){
+    var lvl = Math.min(Math.max(parseInt(String(arg || "").trim(), 10) || 3, 1), 4);
+    return "<h" + lvl + ">" + i + "</h" + lvl + ">";
+  });
+  ["h1","h2","h3","h4"].forEach(function(t){
+    var lvl = t.slice(1);
+    s = pairReplace(s, t, function(a,i){ return "<h" + lvl + ">" + i + "</h" + lvl + ">"; });
+  });
+
+  s = pairReplace(s, "float", function(arg, i){
+    var f = String(arg || "").trim().toLowerCase();
+    return (f === "left" || f === "right" || f === "none") ? '<span style="float:' + f + '">' + i + "</span>" : i;
+  });
+  s = pairReplace(s, "color", function(arg, i){
+    var c = sanitizeColor(arg);
+    return c ? '<span style="color:' + c + '">' + i + "</span>" : i;
+  });
+  s = pairReplace(s, "size", function(arg, i){
+    var px = {1:9,2:11,3:13,4:15,5:18,6:22,7:26}[parseInt(String(arg || "").trim(), 10)];
+    return px ? '<span style="font-size:' + px + 'px">' + i + "</span>" : i;
+  });
+  s = pairReplace(s, "font", function(arg, i){
+    var f = String(arg || "").trim().replace(/[^a-z0-9 ,._-]/gi, "");
+    return f ? '<span style="font-family:' + f + '">' + i + "</span>" : i;
+  });
+
+  s = pairReplace(s, "url", function(arg, i){
+    var url = arg != null ? safeUrl(arg) : safeUrl(unescapeHtml(i).replace(/<[^>]*>/g,""));
+    if(!url) return i;
+    var text = arg != null ? i : escapeHtml(url);
+    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + "</a>";
+  });
+  s = pairReplace(s, "email", function(arg, i){
+    var addr = arg != null ? unescapeHtml(arg).replace(/<[^>]*>/g,"") : unescapeHtml(i).replace(/<[^>]*>/g,"");
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)) return i;
+    var text = arg != null ? i : escapeHtml(addr);
+    return '<a href="mailto:' + escapeHtml(addr) + '">' + text + "</a>";
+  });
+  s = pairReplace(s, "img", function(arg, i){
+    var url = safeUrl(arg != null ? arg : unescapeHtml(i).replace(/<[^>]*>/g,""));
+    return url ? '<img src="' + url + '" alt="" loading="lazy">' : i;
+  });
+  s = pairReplace(s, "media", function(arg, i){
+    var prov = String(arg || "").trim().toLowerCase();
+    var id = unescapeHtml(i).trim().replace(/[^a-zA-Z0-9_-]/g, "");
+    if(!id) return i;
+    if(prov === "youtube") return '<iframe class="bb-media" src="https://www.youtube.com/embed/' + id + '" allowfullscreen loading="lazy"></iframe>';
+    if(prov === "vimeo") return '<iframe class="bb-media" src="https://player.vimeo.com/video/' + id + '" allowfullscreen loading="lazy"></iframe>';
+    if(prov === "dailymotion") return '<iframe class="bb-media" src="https://www.dailymotion.com/embed/video/' + id + '" allowfullscreen loading="lazy"></iframe>';
+    return i;
+  });
+  s = pairReplace(s, "user", function(a,i){ return '<span class="bb-user">@' + i + "</span>"; });
+  s = pairReplace(s, "attach", function(a,i){ return '<span class="bb-attach">Attachment #' + i + "</span>"; });
+
+  s = pairReplace(s, "b", function(a,i){ return "<b>" + i + "</b>"; });
+  s = pairReplace(s, "i", function(a,i){ return "<i>" + i + "</i>"; });
+  s = pairReplace(s, "u", function(a,i){ return "<u>" + i + "</u>"; });
+  s = pairReplace(s, "s", function(a,i){ return "<s>" + i + "</s>"; });
+  s = pairReplace(s, "mark", function(a,i){ return "<mark>" + i + "</mark>"; });
+  s = pairReplace(s, "highlight", function(a,i){ return "<mark>" + i + "</mark>"; });
+  s = pairReplace(s, "sup", function(a,i){ return "<sup>" + i + "</sup>"; });
+  s = pairReplace(s, "sub", function(a,i){ return "<sub>" + i + "</sub>"; });
+
+  s = s.replace(/\[hr\]/gi, "<hr>");
+
+  s = s.replace(/\u0000(\d+)\u0000/g, function(m, idx){
+    var b = blocks[+idx];
+    if(!b) return "";
+    var code = escapeHtml(b.inner);
+    if(b.tag === "icode") return '<code class="bb-icode">' + code + "</code>";
+    if(b.tag === "plain") return code;
+    return '<pre class="bb-code">' + code + "</pre>";
+  });
+
+  s = s.replace(/\[\/?[a-z0-9*]+(?:=["'][^\]]*["']|=[^\s\]]+)?\]/gi, "");
+  return s;
+}
+
+/* ---------- preview / counts ---------- */
+function refresh(){
+  preview.innerHTML = bbcodeToHtml(editor.value);
+  var txt = editor.value;
+  $("#counts").textContent = txt.length + " chars, " + (txt.trim() ? txt.trim().split(/\s+/).length : 0) + " words";
+}
+function saveDraft(){
+  if(!roomId) return;
+  localStorage.setItem("xbb-draft-" + roomId, editor.value);
+  var n = $("#save-note");
+  n.classList.add("show");
+  clearTimeout(n._t);
+  n._t = setTimeout(function(){ n.classList.remove("show"); }, 1500);
+}
+
+/* ---------- editing helpers ---------- */
+function trackSel(){
+  selStart = editor.selectionStart;
+  selEnd = editor.selectionEnd;
+}
+editor.addEventListener("select", trackSel);
+editor.addEventListener("keyup", trackSel);
+editor.addEventListener("mouseup", trackSel);
+
+function wrap(open, close, placeholder){
+  var s = selStart, e = selEnd;
+  var inner = editor.value.slice(s, e) || (placeholder || "");
+  editor.setRangeText(open + inner + close, s, e, "end");
+  editor.dispatchEvent(new Event("input"));
+  editor.focus();
+  var pos = s + open.length + inner.length + close.length;
+  editor.setSelectionRange(pos, pos);
+  trackSel();
+}
+function insert(text){
+  var s = selStart, e = selEnd;
+  editor.setRangeText(text, s, e, "end");
+  editor.dispatchEvent(new Event("input"));
+  editor.focus();
+  editor.setSelectionRange(s + text.length, s + text.length);
+  trackSel();
+}
+
+/* ---------- toolbar ---------- */
+$("#toolbar").addEventListener("click", function(ev){
+  var btn = ev.target.closest("button");
+  if(!btn) return;
+  var act = btn.dataset.act;
+  if(act === "wrap"){
+    wrap(btn.dataset.open, btn.dataset.close, btn.dataset.placeholder);
+  } else if(act === "insert"){
+    insert(btn.dataset.text || "");
+  } else if(act === "link"){
+    var u = prompt("URL:", "https://");
+    if(u && safeUrl(u)) wrap('[URL="' + safeUrl(u) + '"]', "[/URL]", "link text");
+    else if(u) wrap("[URL]", "[/URL]", u);
+  } else if(act === "prompt-wrap"){
+    var v = prompt(btn.dataset.q || "Value:", "");
+    if(!v) return;
+    var val = btn.dataset.tag === "COLOR" ? sanitizeColor(v) : (parseInt(v, 10) || "");
+    if(btn.dataset.tag === "COLOR" && !val){ alert("Invalid color"); return; }
+    if(btn.dataset.tag === "SIZE" && (!val || val < 1 || val > 7)){ alert("Size must be 1-7"); return; }
+    wrap("[" + btn.dataset.tag + "=" + val + "]", "[/" + btn.dataset.tag + "]");
+  } else if(act === "media"){
+    var id = prompt("YouTube / Vimeo / Dailymotion video ID:", "");
+    if(id && /^[a-zA-Z0-9_-]+$/.test(id.trim())){
+      var p = prompt("Provider (youtube / vimeo / dailymotion):", "youtube");
+      if(p) insert("[MEDIA=" + p.trim().toLowerCase() + "]" + id.trim() + "[/MEDIA]");
+    }
+  } else if(act === "image"){
+    openImageDialog(null);
+  }
+});
+
+editor.addEventListener("keydown", function(ev){
+  var mod = ev.metaKey || ev.ctrlKey;
+  if(mod && (ev.key === "b" || ev.key === "B")){ ev.preventDefault(); wrap("[B]", "[/B]"); }
+  else if(mod && (ev.key === "i" || ev.key === "I")){ ev.preventDefault(); wrap("[I]", "[/I]"); }
+  else if(mod && (ev.key === "u" || ev.key === "U")){ ev.preventDefault(); wrap("[U]", "[/U]"); }
+  else if(ev.key === "Tab"){
+    ev.preventDefault();
+    insert("  ");
+  }
+});
+
+/* ---------- image dialog / clickpix ---------- */
+var imgOverlay = $("#img-overlay");
+var pendingFile = null;
+
+function openImageDialog(file){
+  pendingFile = file || null;
+  $("#img-progress").textContent = "";
+  $("#img-url").value = "";
+  imgOverlay.hidden = false;
+  if(pendingFile) $("#img-progress").textContent = "Ready: " + pendingFile.name;
+  $("#img-url").focus();
+}
+function closeImageDialog(){ imgOverlay.hidden = true; pendingFile = null; }
+
+$("#img-cancel").addEventListener("click", closeImageDialog);
+imgOverlay.addEventListener("click", function(ev){ if(ev.target === imgOverlay) closeImageDialog(); });
+
+$("#img-open-site").addEventListener("click", function(){
+  window.open("https://clickpix.org/upload", "_blank", "noopener");
+});
+
+$("#img-insert").addEventListener("click", function(){
+  var url = $("#img-url").value.trim();
+  if(!url || !safeUrl(url)){ alert("Paste a valid image URL (https://...)."); return; }
+  insert("[IMG]" + safeUrl(url) + "[/IMG]");
+  closeImageDialog();
+});
+
+function extractUrlFromResponse(res){
+  var url = null;
+  if(res && typeof res === "object"){
+    url = res.url || res.file && (res.file.url || res.file.file) ||
+          (res.files && res.files[0] && (res.files[0].url || res.files[0].file)) ||
+          (res.image && (res.image.url || res.image.file));
+  }
+  return typeof url === "string" ? url.trim() : null;
+}
+
+async function clickpixUpload(file){
+  var attempts = [
+    { url: "https://clickpix.org/api/upload", field: "file" },
+    { url: "https://clickpix.org/api/upload", field: "files[]" },
+    { url: "https://clickpix.org/upload", field: "files[]" },
+    { url: "https://clickpix.org/upload", field: "file" }
+  ];
+  var lastErr = null;
+  for(var i = 0; i < attempts.length; i++){
+    var ep = attempts[i];
+    try{
+      var fd = new FormData();
+      fd.append(ep.field, file, file.name);
+      var res = await fetch(ep.url, { method: "POST", body: fd });
+      if(!res.ok){ lastErr = "HTTP " + res.status; continue; }
+      var ct = (res.headers.get("content-type") || "").toLowerCase();
+      if(ct.indexOf("json") !== -1){
+        var j = await res.json();
+        var url = extractUrlFromResponse(j);
+        if(url) return url;
+      } else {
+        var text = await res.text();
+        var m = text.match(/https?:\/\/[^\s"'<>()]+?\.(?:png|jpe?g|gif|webp|avif|bmp)/i);
+        if(m) return m[0];
+      }
+    } catch(e){ lastErr = e && e.message ? e.message : "blocked"; }
+  }
+  throw new Error("Auto-upload unavailable (" + (lastErr || "CORS/Cloudflare") + ").");
+}
+
+$("#img-upload").addEventListener("click", async function(){
+  var file = pendingFile || ($("#img-file").files && $("#img-file").files[0]);
+  if(!file){ alert("Choose an image file first."); return; }
+  var prog = $("#img-progress");
+  prog.textContent = "Uploading " + file.name + " to clickpix.org...";
+  try{
+    var url = await clickpixUpload(file);
+    prog.textContent = "Uploaded: " + url;
+    $("#img-url").value = url;
+  } catch(e){
+    prog.textContent = String(e.message || e) + "\nUse \"Open clickpix\" to upload in a new tab, then paste the direct link below.";
+  }
+});
+
+$("#img-file").addEventListener("change", function(){
+  pendingFile = this.files && this.files[0];
+  if(pendingFile) $("#img-progress").textContent = "Ready: " + pendingFile.name;
+});
+
+editor.addEventListener("paste", function(ev){
+  var items = ev.clipboardData && ev.clipboardData.items;
+  if(!items) return;
+  for(var i = 0; i < items.length; i++){
+    if(items[i].type && items[i].type.indexOf("image/") === 0){
+      ev.preventDefault();
+      openImageDialog(items[i].getAsFile());
+      return;
+    }
+  }
+});
+
+/* ---------- P2P sync (PeerJS) ---------- */
+function peerOpts(){
+  var key = (localStorage.getItem(LS_KEY) || "").trim();
+  var o = { debug: 0 };
+  if(key) o.key = key;
+  return o;
+}
+function genId(){
+  var chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  var s = "";
+  for(var i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return "xbb-" + s;
+}
+function cleanup(){
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  if(conn){ try{ conn.close(); }catch(e){} conn = null; }
+  if(peer){ try{ peer.destroy(); }catch(e){} peer = null; }
+}
+function updateConnLabel(){
+  if(conn && conn.open){
+    connLabel.textContent = remoteName ? "Connected with " + remoteName : "Connected";
+  } else {
+    connLabel.textContent = "";
+  }
+}
+function broadcast(text){
+  if(conn && conn.open){
+    try{ conn.send({ t: "update", text: text }); }catch(e){}
+  }
+}
+function handleData(d){
+  if(!d || typeof d !== "object") return;
+  if(d.t === "hello"){
+    remoteName = String(d.name || "").slice(0, 40);
+    updateConnLabel();
+    return;
+  }
+  if(d.t === "state" || d.t === "update"){
+    if(typeof d.text === "string" && d.text !== editor.value){
+      suppress = true;
+      editor.value = d.text;
+      suppress = false;
+      refresh();
+      if(roomId) localStorage.setItem("xbb-draft-" + roomId, d.text);
+    }
+  }
+}
+function wire(c){
+  conn = c;
+  c.on("open", function(){
+    setStatus("connected", isHost ? "Partner connected" : "Connected");
+    updateConnLabel();
+    try{ c.send({ t: "hello", name: nameInput.value.trim() }); }catch(e){}
+    try{ c.send({ t: "state", text: editor.value }); }catch(e){}
+  });
+  c.on("data", handleData);
+  c.on("close", function(){
+    if(conn === c) conn = null;
+    updateConnLabel();
+    if(isHost){
+      setStatus("hosting", "Partner left. Waiting...");
+    } else {
+      setStatus("error", "Disconnected. Reconnecting...");
+      scheduleReconnect();
+    }
+  });
+  c.on("error", function(){
+    if(isHost) setStatus("hosting", "Connection error");
+  });
+}
+function scheduleReconnect(){
+  if(isHost || !roomId) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(function(){
+    if(peer && !peer.destroyed && (!conn || !conn.open)){
+      try{ wire(peer.connect(roomId, { reliable: true, metadata: { name: nameInput.value.trim() } })); }catch(e){ scheduleReconnect(); }
+    }
+  }, 3000);
+}
+function handlePeerError(err){
+  var type = err && err.type;
+  if(type === "peer-unavailable"){
+    if(isHost) return;
+    setStatus("error", "Room not found. Retrying...");
+    scheduleReconnect();
+  } else if(type === "unavailable-id"){
+    if(isHost && !conn){
+      cleanup();
+      createRoom();
+    }
+  } else if(type === "network" || type === "server-error" || type === "socket-error"){
+    setStatus("error", "PeerJS cloud unreachable. Try again or add an API key in Settings.");
+  } else if(type === "browser-incompatible"){
+    setStatus("error", "Browser not supported (WebRTC).");
+  }
+}
+function createRoom(){
+  cleanup();
+  isHost = true;
+  roomId = genId();
+  peer = new Peer(roomId, peerOpts());
+  peer.on("open", function(){
+    setStatus("hosting", "Waiting for partner to join...");
+    showRoomChip();
+    try{ history.replaceState(null, "", location.pathname + "?room=" + roomId); }catch(e){}
+    loadDraft();
+  });
+  peer.on("connection", wire);
+  peer.on("error", handlePeerError);
+  peer.on("disconnected", function(){
+    if(isHost) setStatus("error", "Lost connection to signaling server.");
+  });
+}
+function joinRoom(id){
+  cleanup();
+  isHost = false;
+  roomId = String(id || "").trim().toLowerCase();
+  showRoomChip();
+  loadDraft();
+  if(!roomId){ setStatus("error", "Enter a room code."); return; }
+  setStatus("hosting", "Joining room " + roomId + "...");
+  peer = new Peer(peerOpts());
+  peer.on("open", function(){
+    try{ wire(peer.connect(roomId, { reliable: true, metadata: { name: nameInput.value.trim() } })); }catch(e){ scheduleReconnect(); }
+  });
+  peer.on("error", handlePeerError);
+  peer.on("disconnected", function(){ scheduleReconnect(); });
+}
+function loadDraft(){
+  var draft = localStorage.getItem("xbb-draft-" + roomId);
+  if(draft != null){
+    editor.value = draft;
+    refresh();
+  }
+}
+
+$("#btn-create").addEventListener("click", createRoom);
+$("#btn-join").addEventListener("click", function(){
+  var id = joinInput.value.trim();
+  if(!id){ id = prompt("Room code:"); if(!id) return; }
+  joinRoom(id);
+});
+$("#btn-copy").addEventListener("click", function(){
+  if(!roomId){ alert("Create or join a room first."); return; }
+  var link = location.origin + location.pathname + "?room=" + roomId;
+  if(navigator.clipboard) navigator.clipboard.writeText(link).then(function(){ alert("Invite link copied:\n" + link); });
+  else prompt("Copy this link:", link);
+});
+nameInput.addEventListener("change", function(){
+  localStorage.setItem(LS_NAME, nameInput.value.trim());
+  if(conn && conn.open){ try{ conn.send({ t: "hello", name: nameInput.value.trim() }); }catch(e){} }
+});
+$("#settings-close").addEventListener("click", function(){ $("#settings-overlay").hidden = true; });
+$("#btn-settings").addEventListener("click", function(){ $("#settings-overlay").hidden = false; });
+$("#settings-save").addEventListener("click", function(){
+  localStorage.setItem(LS_KEY, $("#peerjs-key").value.trim());
+  $("#settings-overlay").hidden = true;
+  alert("Saved. Reconnect rooms to apply.");
+});
+
+/* ---------- editor input / sync ---------- */
+editor.addEventListener("input", function(){
+  refresh();
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(saveDraft, 500);
+  if(suppress) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(function(){ broadcast(editor.value); }, 200);
+});
+
+/* ---------- footer buttons ---------- */
+$("#btn-copy-bbcode").addEventListener("click", function(){
+  if(navigator.clipboard) navigator.clipboard.writeText(editor.value).then(function(){ alert("BBCode copied."); });
+  else prompt("Copy:", editor.value);
+});
+$("#btn-download").addEventListener("click", function(){
+  var blob = new Blob([editor.value], { type: "text/plain" });
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "post-" + (roomId || "draft") + ".txt";
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 3000);
+});
+
+/* ---------- boot ---------- */
+refresh();
+var params = new URLSearchParams(location.search);
+var roomParam = params.get("room");
+if(roomParam){
+  joinRoom(roomParam);
+} else {
+  var lastRoom = localStorage.getItem("xbb-last-room");
+  if(lastRoom){ roomId = lastRoom; showRoomChip(); loadDraft(); }
+}
+window.addEventListener("beforeunload", function(){
+  if(roomId) localStorage.setItem("xbb-last-room", roomId);
+});
+</script>
+</body>
+</html>
