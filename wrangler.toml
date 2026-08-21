@@ -1,0 +1,7 @@
+name = "xbb-image-proxy"
+main = "worker.js"
+compatibility_date = "2026-08-20"
+
+[[kv_namespaces]]
+binding = "XBB_DRAFTS"
+id = "e69139df95534b1e947aeba07fcad029"

@@ -110,8 +110,16 @@ footer{
 .overlay[hidden]{display:none}
 .dialog{
   background:var(--panel); border:1px solid var(--border); border-radius:10px;
-  padding:18px; width:420px; max-width:92vw; box-shadow:0 12px 40px rgba(0,0,0,.25);
+  padding:18px; width:520px; max-width:92vw; box-shadow:0 12px 40px rgba(0,0,0,.25);
 }
+.dropzone{
+  border:2px dashed var(--border); border-radius:10px; padding:26px 16px; margin:10px 0 14px;
+  text-align:center; cursor:pointer; transition:border-color .15s, background .15s; background:var(--code-bg);
+}
+.dropzone:hover,.dropzone.dragover{border-color:var(--accent); background:var(--panel)}
+.dropzone-icon{font-size:28px; line-height:1; color:var(--accent); margin-bottom:8px; opacity:.85}
+.dropzone-title{font-size:14px; font-weight:600; color:var(--text); margin-bottom:4px}
+.dropzone-sub{font-size:12px; color:var(--muted)}
 .dialog h3{margin:0 0 12px; font-size:15px}
 .dialog .row{display:flex; gap:8px; margin:10px 0; align-items:center}
 .dialog .row input[type=text]{flex:1}
@@ -198,9 +206,14 @@ footer{
   <div class="dialog">
     <h3>Insert images</h3>
     <div class="hint">Upload to Imgur (anonymous). clickpix.org blocks automated uploads (Cloudflare), so for clickpix use the URL option below.</div>
+    <div class="dropzone" id="img-dropzone">
+      <div class="dropzone-icon" aria-hidden="true">⭳</div>
+      <div class="dropzone-title">Drop images here</div>
+      <div class="dropzone-sub">or click to browse (multiple files supported)</div>
+    </div>
     <div class="row">
-      <input type="file" id="img-file" accept="image/*" multiple style="flex:1">
-      <button id="img-upload" class="primary">Upload to Imgur</button>
+      <input type="file" id="img-file" accept="image/*" multiple style="display:none">
+      <button id="img-upload" class="primary" style="flex:1">Upload to Imgur</button>
     </div>
     <div id="img-progress"></div>
     <div class="divider">or paste direct image URL(s) (e.g. from clickpix.org)</div>
@@ -300,6 +313,47 @@ nameInput.value = localStorage.getItem(LS_NAME) || "";
 $("#peerjs-key").value = localStorage.getItem(LS_KEY) || "";
 var proxyUrl = localStorage.getItem(LS_PROXY) || "https://xbb-image-proxy.xenbb-collab.workers.dev";
 $("#img-proxy-url").value = proxyUrl;
+
+/* cloud autosave (KV-backed, across instances) */
+var LS_DRAFT_TS = "xbb-draft-ts-";
+var cloudDraftUrl = (proxyUrl.replace(/\/+$/, "") || "https://xbb-image-proxy.xenbb-collab.workers.dev") + "/draft";
+var lastServerTs = 0, pollTimer = null;
+function localDraftTs(){
+  var n = parseInt(localStorage.getItem(LS_DRAFT_TS + roomId) || "0", 10);
+  return isNaN(n) ? 0 : n;
+}
+function setLocalDraftTs(n){ localStorage.setItem(LS_DRAFT_TS + roomId, String(n)); }
+function cloudSave(text, ts){
+  if(!roomId || roomId === "manual" || cloudDraftUrl.indexOf("/draft") === -1) return;
+  ts = ts || Date.now();
+  setLocalDraftTs(ts);
+  fetch(cloudDraftUrl + "?room=" + encodeURIComponent(roomId), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: text, ts: ts })
+  }).catch(function(){});
+}
+function cloudPoll(){
+  if(!roomId || roomId === "manual" || cloudDraftUrl.indexOf("/draft") === -1) return;
+  fetch(cloudDraftUrl + "?room=" + encodeURIComponent(roomId))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d || typeof d.ts !== "number") return;
+      if(d.ts > lastServerTs) lastServerTs = d.ts;
+      if(d.ts <= localDraftTs()) return;
+      if(typeof d.text === "string" && d.text !== editor.value){
+        suppress = true;
+        editor.value = d.text;
+        suppress = false;
+        setLocalDraftTs(d.ts);
+        localStorage.setItem("xbb-draft-" + roomId, d.text);
+        refresh();
+      }
+    })
+    .catch(function(){});
+}
+function startCloudPoll(){ stopCloudPoll(); pollTimer = setInterval(cloudPoll, 4000); }
+function stopCloudPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
 
 /* ---------- status ---------- */
 function setStatus(cls, text){
@@ -523,7 +577,10 @@ function refresh(){
 }
 function saveDraft(){
   if(!roomId) return;
+  var ts = Date.now();
   localStorage.setItem("xbb-draft-" + roomId, editor.value);
+  setLocalDraftTs(ts);
+  cloudSave(editor.value, ts);
   var n = $("#save-note");
   n.classList.add("show");
   clearTimeout(n._t);
@@ -747,16 +804,37 @@ editor.addEventListener("drop", function(ev){
   if(f.length){ ev.preventDefault(); doImgurUpload(f); }
 });
 imgOverlay.addEventListener("dragover", function(ev){
-  if(hasImageFile(ev.dataTransfer)) ev.preventDefault();
+  if(hasImageFile(ev.dataTransfer)){ ev.preventDefault(); var dz = $("#img-dropzone"); if(dz) dz.classList.add("dragover"); }
+});
+imgOverlay.addEventListener("dragleave", function(){
+  var dz = $("#img-dropzone"); if(dz) dz.classList.remove("dragover");
 });
 imgOverlay.addEventListener("drop", function(ev){
+  var dz = $("#img-dropzone"); if(dz) dz.classList.remove("dragover");
   var f = imageFilesFrom(ev.dataTransfer);
   if(f.length){
     ev.preventDefault();
     pendingFile = f;
-    setProgress("Ready: " + f.length + " image file" + (f.length === 1 ? "" : "s"));
+    doImgurUpload(f);
   }
 });
+
+/* dropzone browse */
+var dz = $("#img-dropzone");
+if(dz){
+  dz.addEventListener("click", function(){ $("#img-file").click(); });
+  dz.addEventListener("dragover", function(ev){ if(hasImageFile(ev.dataTransfer)){ ev.preventDefault(); dz.classList.add("dragover"); } });
+  dz.addEventListener("dragleave", function(){ dz.classList.remove("dragover"); });
+  dz.addEventListener("drop", function(ev){
+    dz.classList.remove("dragover");
+    var f = imageFilesFrom(ev.dataTransfer);
+    if(f.length){
+      ev.preventDefault();
+      pendingFile = f;
+      doImgurUpload(f);
+    }
+  });
+}
 
 /* ---------- P2P sync (PeerJS) ---------- */
 function peerOpts(){
@@ -813,7 +891,12 @@ function handleData(d){
       editor.value = d.text;
       suppress = false;
       refresh();
-      if(roomId) localStorage.setItem("xbb-draft-" + roomId, d.text);
+      if(roomId){
+        var rts = (d.ts && d.ts > Date.now() - 60000) ? d.ts : Date.now();
+        localStorage.setItem("xbb-draft-" + roomId, d.text);
+        setLocalDraftTs(rts);
+        cloudSave(d.text, rts);
+      }
     }
   }
 }
@@ -988,6 +1071,7 @@ function createRoom(){
   $("#room-transport").textContent = "";
   try{ history.replaceState(null, "", location.pathname + "?room=" + roomId); }catch(e){}
   loadDraft();
+  cloudPoll();
   setStatus("hosting", "Creating room...");
   startRelay().then(onRelayReady, function(){
     setStatus("hosting", "Relay unreachable - trying P2P cloud...");
@@ -1016,6 +1100,7 @@ function joinRoom(id){
   showRoomChip();
   $("#room-transport").textContent = "";
   loadDraft();
+  cloudPoll();
   if(!roomId){ setStatus("error", "Enter a room code."); return; }
   setStatus("hosting", "Joining room " + roomId + "...");
   startRelay().then(onRelayReady, function(){
@@ -1039,6 +1124,7 @@ function loadDraft(){
     editor.value = draft;
     refresh();
   }
+  startCloudPoll();
 }
 
 /* ---------- manual connect (serverless WebRTC) ---------- */
@@ -1206,10 +1292,13 @@ if(roomParam){
   joinRoom(roomParam);
 } else {
   var lastRoom = localStorage.getItem("xbb-last-room");
-  if(lastRoom){ roomId = lastRoom; showRoomChip(); loadDraft(); }
+  if(lastRoom){ roomId = lastRoom; showRoomChip(); loadDraft(); cloudPoll(); }
 }
 window.addEventListener("beforeunload", function(){
   if(roomId) localStorage.setItem("xbb-last-room", roomId);
+});
+window.addEventListener("unload", function(){
+  if(roomId && roomId !== "manual") cloudSave(editor.value);
 });
 </script>
 </body>
