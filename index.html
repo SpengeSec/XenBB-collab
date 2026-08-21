@@ -196,19 +196,19 @@ footer{
 
 <div class="overlay" id="img-overlay" hidden>
   <div class="dialog">
-    <h3>Insert image</h3>
-    <div class="hint">One-click upload to Imgur (anonymous, permanent). clickpix.org blocks automated uploads (Cloudflare), so for clickpix use the manual option below.</div>
+    <h3>Insert images</h3>
+    <div class="hint">Upload to Imgur (anonymous). clickpix.org blocks automated uploads (Cloudflare), so for clickpix use the URL option below.</div>
     <div class="row">
-      <input type="file" id="img-file" accept="image/*" style="flex:1">
+      <input type="file" id="img-file" accept="image/*" multiple style="flex:1">
       <button id="img-upload" class="primary">Upload to Imgur</button>
     </div>
     <div id="img-progress"></div>
-    <div class="divider">or paste a direct image URL (e.g. from clickpix.org)</div>
+    <div class="divider">or paste direct image URL(s) (e.g. from clickpix.org)</div>
     <div class="row">
       <input type="text" id="img-url" placeholder="https://...">
       <button id="img-open-site" title="Upload at clickpix.org in a new tab, then paste the direct link here">Open clickpix</button>
     </div>
-    <div class="hint">Tip: drag &amp; drop an image here (or onto the editor), or paste a screenshot straight into the editor.</div>
+    <div class="hint">Tip: drop one or several images here (or onto the editor), or paste a screenshot straight into the editor - they upload and are inserted automatically.</div>
     <div class="actions">
       <button id="img-cancel">Cancel</button>
       <button id="img-insert" class="primary">Insert [IMG]</button>
@@ -649,65 +649,112 @@ function imgurUpload(file){
   });
 }
 
+function imageFilesFrom(dt){
+  var files = (dt && dt.files) ? Array.prototype.slice.call(dt.files) : [];
+  return files.filter(function(f){ return f && f.type && f.type.indexOf("image/") === 0; });
+}
+
+function uploadImages(files, progressCb){
+  var prog = progressCb || function(){};
+  var urls = [];
+  var errors = [];
+  var queue = files.filter(function(f){ return f && f.type && f.type.indexOf("image/") === 0; });
+  if(!queue.length) return Promise.resolve({ urls: urls, errors: errors });
+  prog(0, queue.length);
+  return queue.reduce(function(p, f){
+    return p.then(function(){
+      return imgurUpload(f).then(function(u){
+        urls.push(u);
+        prog(urls.length + errors.length, queue.length, f.name);
+      }).catch(function(e){
+        errors.push((f.name || "image") + ": " + (e && e.message || e));
+        prog(urls.length + errors.length, queue.length, f.name);
+      });
+    });
+  }, Promise.resolve()).then(function(){
+    return { urls: urls, errors: errors };
+  });
+}
+
+function setProgress(text){
+  var el = $("#img-progress");
+  if(el) el.textContent = text;
+}
+
+function doImgurUpload(files){
+  var list = imageFilesFrom({ files: files });
+  if(!list.length){ alert("Choose image file(s) first."); return; }
+  setProgress("Uploading 0/" + list.length + " to imgur.com...");
+  uploadImages(list, function(done, total, name){
+    setProgress("Uploading " + done + "/" + total + " to imgur.com" + (name ? " (" + name + ")" : "") + "...");
+  }).then(function(res){
+    var inserted = 0, failed = res.errors.length;
+    res.urls.forEach(function(u){ insert("[IMG]" + u + "[/IMG]"); inserted++; });
+    if(failed){
+      setProgress("Inserted " + inserted + ", failed (" + failed + "): " + res.errors.join(" | "));
+    } else {
+      setProgress("Uploaded " + inserted + " image" + (inserted === 1 ? "" : "s") + " to imgur.com.");
+      closeImageDialog();
+    }
+  });
+}
+
+function handlePasteOrDrop(files){
+  var list = imageFilesFrom({ files: files });
+  if(!list.length) return false;
+  doImgurUpload(list);
+  return true;
+}
+
 $("#img-upload").addEventListener("click", async function(){
-  var file = pendingFile || ($("#img-file").files && $("#img-file").files[0]);
-  if(!file){ alert("Choose an image file first."); return; }
-  var prog = $("#img-progress");
-  prog.textContent = "Uploading " + file.name + " to imgur.com...";
-  try{
-    var url = await imgurUpload(file);
-    prog.textContent = "Uploaded: " + url;
-    insert("[IMG]" + url + "[/IMG]");
-    closeImageDialog();
-  } catch(e){
-    prog.textContent = "Imgur upload failed (" + (e && e.message || e) + "). Use the clickpix option below instead.";
-  }
+  var inp = $("#img-file");
+  var files = inp.files ? Array.prototype.slice.call(inp.files) : [];
+  if(pendingFile && Array.isArray(pendingFile)) files = pendingFile.concat(files);
+  if(!files.length){ alert("Choose image file(s) first."); return; }
+  doImgurUpload(files);
 });
 
 $("#img-file").addEventListener("change", function(){
-  pendingFile = this.files && this.files[0];
-  if(pendingFile) $("#img-progress").textContent = "Ready: " + pendingFile.name;
+  var files = this.files ? Array.prototype.slice.call(this.files) : [];
+  pendingFile = files.length ? files : null;
+  if(files.length) setProgress("Ready: " + files.length + " image file" + (files.length === 1 ? "" : "s"));
 });
 
 editor.addEventListener("paste", function(ev){
   var items = ev.clipboardData && ev.clipboardData.items;
   if(!items) return;
+  var files = [];
   for(var i = 0; i < items.length; i++){
     if(items[i].type && items[i].type.indexOf("image/") === 0){
       ev.preventDefault();
-      openImageDialog(items[i].getAsFile());
-      return;
+      files.push(items[i].getAsFile());
     }
   }
+  if(files.length) handlePasteOrDrop(files);
 });
 
 /* drag & drop images */
-function firstImageFile(dt){
-  var files = dt && dt.files;
-  if(!files) return null;
-  for(var i = 0; i < files.length; i++){
-    if(files[i].type && files[i].type.indexOf("image/") === 0) return files[i];
-  }
-  return null;
+function hasImageFile(dt){
+  return imageFilesFrom(dt).length > 0;
 }
 editor.addEventListener("dragover", function(ev){
-  if(firstImageFile(ev.dataTransfer)){ ev.preventDefault(); editor.classList.add("dragover"); }
+  if(hasImageFile(ev.dataTransfer)){ ev.preventDefault(); editor.classList.add("dragover"); }
 });
 editor.addEventListener("dragleave", function(){ editor.classList.remove("dragover"); });
 editor.addEventListener("drop", function(ev){
   editor.classList.remove("dragover");
-  var f = firstImageFile(ev.dataTransfer);
-  if(f){ ev.preventDefault(); openImageDialog(f); }
+  var f = imageFilesFrom(ev.dataTransfer);
+  if(f.length){ ev.preventDefault(); doImgurUpload(f); }
 });
 imgOverlay.addEventListener("dragover", function(ev){
-  if(firstImageFile(ev.dataTransfer)) ev.preventDefault();
+  if(hasImageFile(ev.dataTransfer)) ev.preventDefault();
 });
 imgOverlay.addEventListener("drop", function(ev){
-  var f = firstImageFile(ev.dataTransfer);
-  if(f){
+  var f = imageFilesFrom(ev.dataTransfer);
+  if(f.length){
     ev.preventDefault();
     pendingFile = f;
-    $("#img-progress").textContent = "Ready: " + f.name;
+    setProgress("Ready: " + f.length + " image file" + (f.length === 1 ? "" : "s"));
   }
 });
 
