@@ -232,6 +232,7 @@ footer{
         <input type="text" id="manual-reply" placeholder="Paste reply code" style="flex:1">
         <button id="manual-apply" class="primary">Connect</button>
       </div>
+      <div id="manual-status" class="hint"></div>
     </div>
     <div class="manual-section">
       <h4>Join side</h4>
@@ -750,10 +751,17 @@ function wirePeer(c){
 function wireManual(ch){
   var l = { open: false, peer: null, send: function(o){ if(l.open && ch.readyState === "open"){ try{ ch.send(JSON.stringify(o)); }catch(e){} } } };
   link = l;
-  ch.onopen = function(){ l.open = true; onLinkOpen(); };
+  ch.onopen = function(){
+    l.open = true;
+    var ms = $("#manual-status");
+    if(ms) ms.textContent = "Connected!";
+    onLinkOpen();
+  };
   ch.onmessage = function(ev){ try{ handleData(JSON.parse(ev.data)); }catch(e){} };
   ch.onclose = function(){
     if(link === l) link = null;
+    var ms = $("#manual-status");
+    if(ms) ms.textContent = "Connection closed. Create new codes to reconnect.";
     onLinkClose();
   };
 }
@@ -843,7 +851,7 @@ function waitIce(p){
     p.addEventListener("icegatheringstatechange", function h(){
       if(p.iceGatheringState === "complete"){ p.removeEventListener("icegatheringstatechange", h); res(); }
     });
-    setTimeout(res, 3500);
+    setTimeout(res, 5000);
   });
 }
 function manualHost(){
@@ -864,6 +872,9 @@ function manualHost(){
       $("#manual-host-note").hidden = false;
       $("#manual-host-copy").hidden = false;
       $("#manual-reply-note").hidden = false;
+      $("#manual-reply").value = "";
+      $("#manual-status").textContent = "";
+      $("#manual-apply").disabled = false;
       setStatus("hosting", "Manual mode: send host code, paste reply");
     })
     .catch(function(e){ setStatus("error", "Manual connect failed: " + (e && e.message || e)); });
@@ -894,9 +905,26 @@ function manualJoin(){
 function manualApplyReply(){
   var obj = manualDecode($("#manual-reply").value);
   if(!obj || obj.t !== "answer"){ alert("Paste the reply code from your partner."); return; }
+  var state = pc ? pc.signalingState : "closed";
+  if(state !== "have-local-offer"){
+    if(state === "stable"){
+      $("#manual-status").textContent = "This reply was already applied. If you are not connected, create a new host code and repeat the exchange.";
+    } else {
+      $("#manual-status").textContent = "Not ready for a reply (state: " + state + "). Create a new host code and repeat the exchange.";
+    }
+    return;
+  }
+  var btn = $("#manual-apply");
+  btn.disabled = true;
   pc.setRemoteDescription({ type: "answer", sdp: obj.sdp })
-    .then(function(){ setStatus("hosting", "Manual mode: connecting..."); })
-    .catch(function(e){ setStatus("error", "Could not apply reply: " + (e && e.message || e)); });
+    .then(function(){
+      setStatus("hosting", "Manual mode: connecting...");
+      $("#manual-status").textContent = "Reply applied - connecting...";
+    }, function(e){
+      setStatus("error", "Could not apply reply: " + (e && e.message || e));
+      $("#manual-status").textContent = "Failed: " + (e && e.message || e) + ". Create a new host code and repeat the exchange.";
+    })
+    .then(function(){ btn.disabled = false; });
 }
 function copyFromField(field){
   var v = $(field).value;
