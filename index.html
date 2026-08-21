@@ -434,11 +434,7 @@ function bbcodeToHtml(src){
   s = pairReplace(s, "img", function(arg, i){
     var url = safeUrl(arg != null ? arg : unescapeHtml(i).replace(/<[^>]*>/g,""));
     if(!url) return i;
-    var src = url;
-    if(proxyUrl && /^https:\/\/([a-z0-9.-]+\.)?clickpix\.org\//i.test(url)){
-      src = proxyUrl + "?url=" + encodeURIComponent(url);
-    }
-    return '<img src="' + src + '" alt="" loading="lazy" onerror="bbImgErr(this)">';
+    return '<img src="' + url + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="bbImgErr(this)">';
   });
   s = pairReplace(s, "media", function(arg, i){
     var prov = String(arg || "").trim().toLowerCase();
@@ -479,25 +475,47 @@ function bbcodeToHtml(src){
 /* ---------- preview / counts ---------- */
 window.bbImgErr = function(el){
   var url = el.getAttribute("data-src") || el.src;
+  if(proxyUrl && url.indexOf(proxyUrl) !== 0){
+    var orig = url;
+    if(window._bbProxyRetry && window._bbProxyRetry[orig]){
+      window._bbProxyRetry[orig].try++;
+      if(window._bbProxyRetry[orig].try > 2){ return finalImgFail(el, orig); }
+    } else {
+      window._bbProxyRetry = window._bbProxyRetry || {};
+      window._bbProxyRetry[orig] = { try: 1 };
+    }
+    var img = document.createElement("img");
+    img.src = proxyUrl + "?url=" + encodeURIComponent(orig);
+    img.alt = "";
+    img.loading = "lazy";
+    img.setAttribute("data-src", orig);
+    img.onerror = function(){ finalImgFail(img, orig); };
+    if(el.parentNode) el.parentNode.replaceChild(img, el);
+    return;
+  }
+  finalImgFail(el, url);
+};
+function finalImgFail(el, url){
+  var orig = el.getAttribute("data-orig") || url;
   var a = document.createElement("a");
-  a.href = url;
+  a.href = orig;
   a.target = "_blank";
   a.rel = "noopener noreferrer";
   a.className = "bb-img-fallback";
-  a.textContent = "Image blocked by Cloudflare - click to open it (it will retry automatically)";
+  a.textContent = "Image blocked - click to open it (it will retry automatically)";
   if(el.parentNode) el.parentNode.replaceChild(a, el);
   a.addEventListener("click", function(){
     setTimeout(function(){
       var img = document.createElement("img");
-      img.src = url + (url.indexOf("?") === -1 ? "?" : "&") + "_bbretry=" + Date.now();
+      img.src = orig + (orig.indexOf("?") === -1 ? "?" : "&") + "_bbretry=" + Date.now();
       img.alt = "";
       img.loading = "lazy";
-      img.setAttribute("data-src", url);
+      img.setAttribute("data-src", orig);
       img.onerror = function(){ bbImgErr(img); };
       if(a.parentNode) a.parentNode.replaceChild(img, a);
     }, 2500);
   });
-};
+}
 function refresh(){
   preview.innerHTML = bbcodeToHtml(editor.value);
   var txt = editor.value;
