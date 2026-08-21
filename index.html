@@ -132,7 +132,7 @@ footer{
 <header>
   <h1>Xen<span>BB</span> Collab</h1>
   <div id="status"><span id="status-dot"></span><span id="status-text">Offline</span></div>
-  <div id="room-chip">Room: <b id="room-code"></b></div>
+  <div id="room-chip">Room: <b id="room-code"></b> <span id="room-transport" style="color:var(--muted)"></span></div>
   <div class="spacer"></div>
   <span id="conn-label" style="font-size:12px;color:var(--muted)"></span>
   <input type="text" id="name-input" placeholder="Your name" title="Shown to your collaborator">
@@ -256,7 +256,7 @@ footer{
 <div class="overlay" id="settings-overlay" hidden>
   <div class="dialog">
     <h3>Settings</h3>
-    <div class="hint">Real-time sync uses PeerJS (WebRTC). The free public PeerJS cloud usually works; if connections are flaky, get a free API key at peerjs.com and paste it here.</div>
+    <div class="hint">Sync tries public MQTT relays first (most reliable), then the PeerJS P2P cloud. If PeerJS is blocked on your network, get a free API key at peerjs.com and paste it here. Note: relayed text passes through a public MQTT broker - rooms use random codes, but it is not end-to-end encrypted.</div>
     <div class="row">
       <input type="text" id="peerjs-key" placeholder="PeerJS API key (optional)" style="flex:1">
       <button id="settings-save" class="primary">Save</button>
@@ -266,6 +266,7 @@ footer{
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.14.1/dist/mqtt.min.js"></script>
 <script id="app">
 "use strict";
 var $ = function(s){ return document.querySelector(s); };
@@ -275,6 +276,12 @@ var roomChip = $("#room-chip"), roomCodeEl = $("#room-code"), connLabel = $("#co
 var nameInput = $("#name-input"), joinInput = $("#join-input");
 
 var peer = null, link = null, pc = null, dc = null, roomId = null, isHost = false, manualMode = false;
+var relayClient = null, relayMyId = "", transport = "", greetedPeer = "";
+var relayBrokers = [
+  "wss://broker.emqx.io:8084/mqtt",
+  "wss://broker.hivemq.com:8884/mqtt",
+  "wss://mqtt.eclipseprojects.io/mqtt"
+];
 var remoteName = "";
 var syncTimer = null, draftTimer = null, reconnectTimer = null, suppress = false;
 var selStart = 0, selEnd = 0;
@@ -683,19 +690,22 @@ function genId(){
 function cleanup(){
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
+  if(relayClient){ try{ relayClient.end(true); }catch(e){} relayClient = null; }
   if(link){ if(link.peer){ try{ link.peer.close(); }catch(e){} } link = null; }
   if(pc){ try{ pc.close(); }catch(e){} pc = null; }
   if(dc){ try{ dc.close(); }catch(e){} dc = null; }
   if(peer){ try{ peer.destroy(); }catch(e){} peer = null; }
+  greetedPeer = "";
 }
 function updateConnLabel(){
-  if(link && link.open){
+  if((link && link.open) || (transport === "relay" && relayClient)){
     connLabel.textContent = remoteName ? "Connected with " + remoteName : "Connected";
   } else {
     connLabel.textContent = "";
   }
 }
 function sendMsg(o){
+  if(transport === "relay"){ publishRelay(o); return; }
   if(link && link.open){ try{ link.send(o); }catch(e){} }
 }
 function broadcast(text){ sendMsg({ t: "update", text: text }); }
@@ -704,6 +714,13 @@ function handleData(d){
   if(d.t === "hello"){
     remoteName = String(d.name || "").slice(0, 40);
     updateConnLabel();
+    if(transport === "relay"){
+      setStatus("connected", "Connected via relay");
+      if(d.from && d.from !== greetedPeer){
+        greetedPeer = d.from;
+        publishRelay({ t: "hello", name: nameInput.value.trim() });
+      }
+    }
     return;
   }
   if(d.t === "state" || d.t === "update"){
@@ -778,7 +795,7 @@ function handlePeerError(err){
   var type = err && err.type;
   if(type === "peer-unavailable"){
     if(isHost) return;
-    setStatus("error", "Room not found (has the host created it yet?). Retrying...");
+    setStatus("error", "Room not found on P2P cloud (host may be on relay, or not started). Retrying...");
     scheduleReconnect();
   } else if(type === "unavailable-id"){
     if(isHost && !link){
@@ -793,17 +810,112 @@ function handlePeerError(err){
     setStatus("error", "Browser not supported (WebRTC).");
   }
 }
+/* ---------- MQTT relay transport ---------- */
+function topicFor(){ return "xbb-collab/" + roomId; }
+function publishRelay(o){
+  if(!relayClient) return;
+  var msg = {};
+  for(var k in o) msg[k] = o[k];
+  msg.from = relayMyId;
+  msg.ts = Date.now();
+  var retain = msg.t === "update" || msg.t === "state";
+  try{ relayClient.publish(topicFor(), JSON.stringify(msg), { qos: 1, retain: retain }); }catch(e){}
+}
+function attachRelayClient(client){
+  relayClient = client;
+  relayMyId = client.options.clientId || "";
+  client.on("message", function(topic, payload){
+    var d;
+    try{ d = JSON.parse(payload.toString()); }catch(e){ return; }
+    if(d.from === relayMyId) return;
+    handleData(d);
+  });
+  client.on("close", function(){
+    if(relayClient === client){
+      relayClient = null;
+      if(!manualMode && transport === "relay"){ setStatus("error", "Relay connection lost. Reconnecting..."); scheduleRelay(); }
+    }
+  });
+}
+function scheduleRelay(){
+  if(manualMode || !roomId || transport !== "relay") return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(function(){
+    if(!relayClient){
+      startRelay().then(onRelayReady, function(){ setStatus("error", "All relays unreachable. Try again later or use Manual connect."); });
+    }
+  }, 3000);
+}
+function startRelay(){
+  return new Promise(function(resolve, reject){
+    var i = 0;
+    function attempt(){
+      if(i >= relayBrokers.length){ reject(new Error("all brokers failed")); return; }
+      var url = relayBrokers[i++];
+      var client;
+      try{
+        client = mqtt.connect(url, {
+          clientId: "xbb-" + Math.random().toString(36).slice(2, 12),
+          clean: true,
+          connectTimeout: 8000,
+          reconnectPeriod: 0,
+          keepalive: 30
+        });
+      }catch(e){ attempt(); return; }
+      var settled = false;
+      var timer = setTimeout(function(){
+        if(!settled){ settled = true; try{ client.end(true); }catch(e){} attempt(); }
+      }, 10000);
+      client.on("connect", function(){
+        client.subscribe(topicFor(), { qos: 1 }, function(){
+          if(settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(client);
+        });
+      });
+      client.on("error", function(){
+        if(settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try{ client.end(true); }catch(e){}
+        attempt();
+      });
+    }
+    attempt();
+  });
+}
+function onRelayReady(client){
+  transport = "relay";
+  $("#room-transport").textContent = "(relay)";
+  attachRelayClient(client);
+  publishRelay({ t: "hello", name: nameInput.value.trim() });
+  publishRelay({ t: "state", text: editor.value });
+  setStatus("hosting", "Room ready - waiting for partner to open the link...");
+}
+
 function createRoom(){
   cleanup();
   isHost = true;
   manualMode = false;
+  transport = "";
   roomId = genId();
+  showRoomChip();
+  $("#room-transport").textContent = "";
+  try{ history.replaceState(null, "", location.pathname + "?room=" + roomId); }catch(e){}
+  loadDraft();
+  setStatus("hosting", "Creating room...");
+  startRelay().then(onRelayReady, function(){
+    setStatus("hosting", "Relay unreachable - trying P2P cloud...");
+    createPeerjsHost();
+  });
+}
+function createPeerjsHost(){
   peer = new Peer(roomId, peerOpts());
   peer.on("open", function(){
+    transport = "peerjs";
+    $("#room-transport").textContent = "(P2P)";
     setStatus("hosting", "Waiting for partner to join...");
-    showRoomChip();
-    try{ history.replaceState(null, "", location.pathname + "?room=" + roomId); }catch(e){}
-    loadDraft();
   });
   peer.on("connection", wirePeer);
   peer.on("error", handlePeerError);
@@ -815,13 +927,23 @@ function joinRoom(id){
   cleanup();
   isHost = false;
   manualMode = false;
+  transport = "";
   roomId = String(id || "").trim().toLowerCase();
   showRoomChip();
+  $("#room-transport").textContent = "";
   loadDraft();
   if(!roomId){ setStatus("error", "Enter a room code."); return; }
   setStatus("hosting", "Joining room " + roomId + "...");
+  startRelay().then(onRelayReady, function(){
+    setStatus("hosting", "Relay unreachable - trying P2P cloud...");
+    joinPeerjs();
+  });
+}
+function joinPeerjs(){
   peer = new Peer(peerOpts());
   peer.on("open", function(){
+    transport = "peerjs";
+    $("#room-transport").textContent = "(P2P)";
     try{ wirePeer(peer.connect(roomId, { reliable: true, metadata: { name: nameInput.value.trim() } })); }catch(e){ scheduleReconnect(); }
   });
   peer.on("error", handlePeerError);
