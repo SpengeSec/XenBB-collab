@@ -120,6 +120,10 @@ footer{
 .dialog .divider::before,.dialog .divider::after{content:""; flex:1; border-top:1px solid var(--border)}
 .dialog .actions{display:flex; justify-content:flex-end; gap:8px; margin-top:14px}
 #img-progress{font-size:12.5px; color:var(--muted); margin-top:8px; white-space:pre-wrap}
+.manual-section{border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin:10px 0}
+.manual-section h4{margin:0 0 8px; font-size:13px; color:var(--accent)}
+.code-box{width:100%; background:var(--code-bg); color:var(--text); border:1px solid var(--border); border-radius:6px; font:12px/1.4 ui-monospace,Menlo,monospace; padding:8px; resize:vertical; word-break:break-all; box-sizing:border-box}
+#editor.dragover{outline:2px dashed var(--accent); outline-offset:-6px}
 @media (max-width:760px){ main{grid-template-columns:1fr; grid-template-rows:1fr 1fr} .pane+.pane{border-left:0; border-top:1px solid var(--border)} }
 </style>
 </head>
@@ -136,6 +140,7 @@ footer{
   <button id="btn-join" class="primary">Join</button>
   <button id="btn-create">Create room</button>
   <button id="btn-copy" class="small" title="Copy invite link">Copy invite link</button>
+  <button id="btn-manual" class="small" title="Serverless connection via exchanged codes - works when PeerJS cloud is down">Manual connect</button>
   <button id="btn-settings" class="small" title="Settings">Settings</button>
 </header>
 
@@ -200,11 +205,50 @@ footer{
       <input type="text" id="img-url" placeholder="https://clickpix.org/...">
       <button id="img-open-site" title="Upload at clickpix.org in a new tab, then paste the link">Open clickpix</button>
     </div>
-    <div class="hint">Tip: upload at clickpix.org/upload in the other tab, copy the direct link (ends in .png/.jpg/.webp...), paste it here.</div>
+    <div class="hint">Tip: drag &amp; drop an image here (or onto the editor), paste a screenshot straight into the editor, or upload at clickpix.org/upload in the other tab and paste the direct link (ends in .png/.jpg/.webp...).</div>
     <div class="actions">
       <button id="img-cancel">Cancel</button>
       <button id="img-insert" class="primary">Insert [IMG]</button>
     </div>
+  </div>
+</div>
+
+<div class="overlay" id="manual-overlay" hidden>
+  <div class="dialog" style="width:540px">
+    <h3>Manual connect (serverless - always works)</h3>
+    <div class="hint">Use this when the PeerJS cloud is unreachable. One of you hosts, the other joins; you exchange two codes by any chat/messenger.</div>
+    <div class="manual-section">
+      <h4>Host side</h4>
+      <div class="row">
+        <button id="manual-create" class="primary">Create host code</button>
+      </div>
+      <div id="manual-host-note" class="hint" hidden>1. Send this code to your partner:</div>
+      <textarea id="manual-host-code" class="code-box" rows="3" readonly hidden placeholder="Host code will appear here"></textarea>
+      <div class="row">
+        <button id="manual-host-copy" class="small" hidden>Copy code</button>
+      </div>
+      <div id="manual-reply-note" class="hint" hidden>2. Paste their reply code here and connect:</div>
+      <div class="row">
+        <input type="text" id="manual-reply" placeholder="Paste reply code" style="flex:1">
+        <button id="manual-apply" class="primary">Connect</button>
+      </div>
+    </div>
+    <div class="manual-section">
+      <h4>Join side</h4>
+      <div class="hint">Paste the host's code, generate your reply, and send it back to the host.</div>
+      <div class="row">
+        <textarea id="manual-guest-code" class="code-box" rows="3" placeholder="Paste host code here" style="flex:1"></textarea>
+      </div>
+      <div class="row">
+        <button id="manual-join" class="primary">Generate reply code</button>
+      </div>
+      <div id="manual-guest-note" class="hint" hidden>Send this reply code back to the host:</div>
+      <textarea id="manual-guest-reply" class="code-box" rows="3" readonly hidden placeholder="Reply code will appear here"></textarea>
+      <div class="row">
+        <button id="manual-guest-copy" class="small" hidden>Copy code</button>
+      </div>
+    </div>
+    <div class="actions"><button id="manual-close">Close</button></div>
   </div>
 </div>
 
@@ -229,7 +273,7 @@ var statusDot = $("#status-dot"), statusText = $("#status-text");
 var roomChip = $("#room-chip"), roomCodeEl = $("#room-code"), connLabel = $("#conn-label");
 var nameInput = $("#name-input"), joinInput = $("#join-input");
 
-var peer = null, conn = null, roomId = null, isHost = false;
+var peer = null, link = null, pc = null, dc = null, roomId = null, isHost = false, manualMode = false;
 var remoteName = "";
 var syncTimer = null, draftTimer = null, reconnectTimer = null, suppress = false;
 var selStart = 0, selEnd = 0;
@@ -592,6 +636,36 @@ editor.addEventListener("paste", function(ev){
   }
 });
 
+/* drag & drop images */
+function firstImageFile(dt){
+  var files = dt && dt.files;
+  if(!files) return null;
+  for(var i = 0; i < files.length; i++){
+    if(files[i].type && files[i].type.indexOf("image/") === 0) return files[i];
+  }
+  return null;
+}
+editor.addEventListener("dragover", function(ev){
+  if(firstImageFile(ev.dataTransfer)){ ev.preventDefault(); editor.classList.add("dragover"); }
+});
+editor.addEventListener("dragleave", function(){ editor.classList.remove("dragover"); });
+editor.addEventListener("drop", function(ev){
+  editor.classList.remove("dragover");
+  var f = firstImageFile(ev.dataTransfer);
+  if(f){ ev.preventDefault(); openImageDialog(f); }
+});
+imgOverlay.addEventListener("dragover", function(ev){
+  if(firstImageFile(ev.dataTransfer)) ev.preventDefault();
+});
+imgOverlay.addEventListener("drop", function(ev){
+  var f = firstImageFile(ev.dataTransfer);
+  if(f){
+    ev.preventDefault();
+    pendingFile = f;
+    $("#img-progress").textContent = "Ready: " + f.name;
+  }
+});
+
 /* ---------- P2P sync (PeerJS) ---------- */
 function peerOpts(){
   var key = (localStorage.getItem(LS_KEY) || "").trim();
@@ -608,21 +682,22 @@ function genId(){
 function cleanup(){
   clearTimeout(reconnectTimer);
   reconnectTimer = null;
-  if(conn){ try{ conn.close(); }catch(e){} conn = null; }
+  if(link){ if(link.peer){ try{ link.peer.close(); }catch(e){} } link = null; }
+  if(pc){ try{ pc.close(); }catch(e){} pc = null; }
+  if(dc){ try{ dc.close(); }catch(e){} dc = null; }
   if(peer){ try{ peer.destroy(); }catch(e){} peer = null; }
 }
 function updateConnLabel(){
-  if(conn && conn.open){
+  if(link && link.open){
     connLabel.textContent = remoteName ? "Connected with " + remoteName : "Connected";
   } else {
     connLabel.textContent = "";
   }
 }
-function broadcast(text){
-  if(conn && conn.open){
-    try{ conn.send({ t: "update", text: text }); }catch(e){}
-  }
+function sendMsg(o){
+  if(link && link.open){ try{ link.send(o); }catch(e){} }
 }
+function broadcast(text){ sendMsg({ t: "update", text: text }); }
 function handleData(d){
   if(!d || typeof d !== "object") return;
   if(d.t === "hello"){
@@ -640,35 +715,54 @@ function handleData(d){
     }
   }
 }
-function wire(c){
-  conn = c;
-  c.on("open", function(){
-    setStatus("connected", isHost ? "Partner connected" : "Connected");
-    updateConnLabel();
-    try{ c.send({ t: "hello", name: nameInput.value.trim() }); }catch(e){}
-    try{ c.send({ t: "state", text: editor.value }); }catch(e){}
-  });
+function onLinkOpen(){
+  setStatus("connected", isHost ? "Partner connected" : "Connected");
+  updateConnLabel();
+  sendMsg({ t: "hello", name: nameInput.value.trim() });
+  sendMsg({ t: "state", text: editor.value });
+}
+function onLinkClose(){
+  updateConnLabel();
+  if(manualMode){
+    setStatus("error", "Manual connection closed.");
+    return;
+  }
+  if(isHost){
+    setStatus("hosting", "Partner left. Waiting...");
+  } else {
+    setStatus("error", "Disconnected. Reconnecting...");
+    scheduleReconnect();
+  }
+}
+function wirePeer(c){
+  var l = { open: false, peer: c, send: function(o){ if(l.open){ try{ c.send(o); }catch(e){} } } };
+  link = l;
+  c.on("open", function(){ l.open = true; onLinkOpen(); });
   c.on("data", handleData);
   c.on("close", function(){
-    if(conn === c) conn = null;
-    updateConnLabel();
-    if(isHost){
-      setStatus("hosting", "Partner left. Waiting...");
-    } else {
-      setStatus("error", "Disconnected. Reconnecting...");
-      scheduleReconnect();
-    }
+    if(link === l) link = null;
+    onLinkClose();
   });
   c.on("error", function(){
     if(isHost) setStatus("hosting", "Connection error");
   });
 }
+function wireManual(ch){
+  var l = { open: false, peer: null, send: function(o){ if(l.open && ch.readyState === "open"){ try{ ch.send(JSON.stringify(o)); }catch(e){} } } };
+  link = l;
+  ch.onopen = function(){ l.open = true; onLinkOpen(); };
+  ch.onmessage = function(ev){ try{ handleData(JSON.parse(ev.data)); }catch(e){} };
+  ch.onclose = function(){
+    if(link === l) link = null;
+    onLinkClose();
+  };
+}
 function scheduleReconnect(){
-  if(isHost || !roomId) return;
+  if(isHost || !roomId || manualMode) return;
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(function(){
-    if(peer && !peer.destroyed && (!conn || !conn.open)){
-      try{ wire(peer.connect(roomId, { reliable: true, metadata: { name: nameInput.value.trim() } })); }catch(e){ scheduleReconnect(); }
+    if(peer && !peer.destroyed && (!link || !link.open)){
+      try{ wirePeer(peer.connect(roomId, { reliable: true, metadata: { name: nameInput.value.trim() } })); }catch(e){ scheduleReconnect(); }
     }
   }, 3000);
 }
@@ -676,15 +770,17 @@ function handlePeerError(err){
   var type = err && err.type;
   if(type === "peer-unavailable"){
     if(isHost) return;
-    setStatus("error", "Room not found. Retrying...");
+    setStatus("error", "Room not found (has the host created it yet?). Retrying...");
     scheduleReconnect();
   } else if(type === "unavailable-id"){
-    if(isHost && !conn){
+    if(isHost && !link){
       cleanup();
       createRoom();
     }
-  } else if(type === "network" || type === "server-error" || type === "socket-error"){
-    setStatus("error", "PeerJS cloud unreachable. Try again or add an API key in Settings.");
+  } else if(type === "network" || type === "server-error" || type === "socket-error" || type === "socket-closed" || type === "ssl-unavailable"){
+    setStatus("error", "PeerJS cloud unreachable. Use Manual connect, or add an API key in Settings.");
+  } else if(type === "invalid-key" || type === "invalid-id"){
+    setStatus("error", "Invalid PeerJS API key in Settings.");
   } else if(type === "browser-incompatible"){
     setStatus("error", "Browser not supported (WebRTC).");
   }
@@ -692,6 +788,7 @@ function handlePeerError(err){
 function createRoom(){
   cleanup();
   isHost = true;
+  manualMode = false;
   roomId = genId();
   peer = new Peer(roomId, peerOpts());
   peer.on("open", function(){
@@ -700,7 +797,7 @@ function createRoom(){
     try{ history.replaceState(null, "", location.pathname + "?room=" + roomId); }catch(e){}
     loadDraft();
   });
-  peer.on("connection", wire);
+  peer.on("connection", wirePeer);
   peer.on("error", handlePeerError);
   peer.on("disconnected", function(){
     if(isHost) setStatus("error", "Lost connection to signaling server.");
@@ -709,6 +806,7 @@ function createRoom(){
 function joinRoom(id){
   cleanup();
   isHost = false;
+  manualMode = false;
   roomId = String(id || "").trim().toLowerCase();
   showRoomChip();
   loadDraft();
@@ -716,7 +814,7 @@ function joinRoom(id){
   setStatus("hosting", "Joining room " + roomId + "...");
   peer = new Peer(peerOpts());
   peer.on("open", function(){
-    try{ wire(peer.connect(roomId, { reliable: true, metadata: { name: nameInput.value.trim() } })); }catch(e){ scheduleReconnect(); }
+    try{ wirePeer(peer.connect(roomId, { reliable: true, metadata: { name: nameInput.value.trim() } })); }catch(e){ scheduleReconnect(); }
   });
   peer.on("error", handlePeerError);
   peer.on("disconnected", function(){ scheduleReconnect(); });
@@ -729,6 +827,91 @@ function loadDraft(){
   }
 }
 
+/* ---------- manual connect (serverless WebRTC) ---------- */
+function manualCode(obj){
+  return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+}
+function manualDecode(str){
+  try{ return JSON.parse(decodeURIComponent(escape(atob(String(str).trim())))); }catch(e){ return null; }
+}
+function manualNewPc(){
+  return new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }] });
+}
+function waitIce(p){
+  return new Promise(function(res){
+    if(p.iceGatheringState === "complete"){ res(); return; }
+    p.addEventListener("icegatheringstatechange", function h(){
+      if(p.iceGatheringState === "complete"){ p.removeEventListener("icegatheringstatechange", h); res(); }
+    });
+    setTimeout(res, 3500);
+  });
+}
+function manualHost(){
+  cleanup();
+  manualMode = true; isHost = true; roomId = "manual";
+  hideRoomChip();
+  setStatus("hosting", "Manual mode: creating host code...");
+  loadDraft();
+  pc = manualNewPc();
+  dc = pc.createDataChannel("sync");
+  wireManual(dc);
+  pc.createOffer()
+    .then(function(o){ return pc.setLocalDescription(o); })
+    .then(function(){ return waitIce(pc); })
+    .then(function(){
+      $("#manual-host-code").value = manualCode({ t: "offer", sdp: pc.localDescription.sdp });
+      $("#manual-host-code").hidden = false;
+      $("#manual-host-note").hidden = false;
+      $("#manual-host-copy").hidden = false;
+      $("#manual-reply-note").hidden = false;
+      setStatus("hosting", "Manual mode: send host code, paste reply");
+    })
+    .catch(function(e){ setStatus("error", "Manual connect failed: " + (e && e.message || e)); });
+}
+function manualJoin(){
+  var obj = manualDecode($("#manual-guest-code").value);
+  if(!obj || obj.t !== "offer"){ alert("Paste the host code first."); return; }
+  cleanup();
+  manualMode = true; isHost = false; roomId = "manual";
+  hideRoomChip();
+  setStatus("hosting", "Manual mode: generating reply...");
+  loadDraft();
+  pc = manualNewPc();
+  pc.ondatachannel = function(e){ dc = e.channel; wireManual(dc); };
+  pc.setRemoteDescription({ type: "offer", sdp: obj.sdp })
+    .then(function(){ return pc.createAnswer(); })
+    .then(function(a){ return pc.setLocalDescription(a); })
+    .then(function(){ return waitIce(pc); })
+    .then(function(){
+      $("#manual-guest-reply").value = manualCode({ t: "answer", sdp: pc.localDescription.sdp });
+      $("#manual-guest-reply").hidden = false;
+      $("#manual-guest-note").hidden = false;
+      $("#manual-guest-copy").hidden = false;
+      setStatus("hosting", "Manual mode: send reply code to host");
+    })
+    .catch(function(e){ setStatus("error", "Manual join failed: " + (e && e.message || e)); });
+}
+function manualApplyReply(){
+  var obj = manualDecode($("#manual-reply").value);
+  if(!obj || obj.t !== "answer"){ alert("Paste the reply code from your partner."); return; }
+  pc.setRemoteDescription({ type: "answer", sdp: obj.sdp })
+    .then(function(){ setStatus("hosting", "Manual mode: connecting..."); })
+    .catch(function(e){ setStatus("error", "Could not apply reply: " + (e && e.message || e)); });
+}
+function copyFromField(field){
+  var v = $(field).value;
+  if(!v){ alert("Nothing to copy yet."); return; }
+  if(navigator.clipboard) navigator.clipboard.writeText(v).then(function(){ alert("Copied."); });
+  else prompt("Copy:", v);
+}
+$("#btn-manual").addEventListener("click", function(){ $("#manual-overlay").hidden = false; });
+$("#manual-close").addEventListener("click", function(){ $("#manual-overlay").hidden = true; });
+$("#manual-create").addEventListener("click", manualHost);
+$("#manual-join").addEventListener("click", manualJoin);
+$("#manual-apply").addEventListener("click", manualApplyReply);
+$("#manual-host-copy").addEventListener("click", function(){ copyFromField("#manual-host-code"); });
+$("#manual-guest-copy").addEventListener("click", function(){ copyFromField("#manual-guest-reply"); });
+
 $("#btn-create").addEventListener("click", createRoom);
 $("#btn-join").addEventListener("click", function(){
   var id = joinInput.value.trim();
@@ -737,13 +920,14 @@ $("#btn-join").addEventListener("click", function(){
 });
 $("#btn-copy").addEventListener("click", function(){
   if(!roomId){ alert("Create or join a room first."); return; }
+  if(manualMode){ alert("Manual mode uses codes instead of links - open Manual connect."); return; }
   var link = location.origin + location.pathname + "?room=" + roomId;
   if(navigator.clipboard) navigator.clipboard.writeText(link).then(function(){ alert("Invite link copied:\n" + link); });
   else prompt("Copy this link:", link);
 });
 nameInput.addEventListener("change", function(){
   localStorage.setItem(LS_NAME, nameInput.value.trim());
-  if(conn && conn.open){ try{ conn.send({ t: "hello", name: nameInput.value.trim() }); }catch(e){} }
+  sendMsg({ t: "hello", name: nameInput.value.trim() });
 });
 $("#settings-close").addEventListener("click", function(){ $("#settings-overlay").hidden = true; });
 $("#btn-settings").addEventListener("click", function(){ $("#settings-overlay").hidden = false; });
